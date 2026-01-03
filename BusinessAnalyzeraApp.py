@@ -1,20 +1,21 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
+import seaborn as sns
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, r2_score
-import io  # <--- FIXED: Added this library
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+import io
+
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & CUSTOM STYLING
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Smart Data Dashboard",
-    page_icon="📊",
+    page_title="Business Analyzer AI",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -61,16 +62,24 @@ st.markdown("""
         padding: 20px;
     }
     
-    /* Table Styling */
-    .dataframe {
-        color: white !important;
+    /* Buttons */
+    .stButton > button {
+        background-color: #00D4FF;
+        color: #0E1117;
+        border: none;
+        border-radius: 5px;
+        font-weight: bold;
+    }
+    .stButton > button:hover {
+        background-color: #00b8db;
+        color: white;
     }
 </style>
 """, unsafe_allow_html=True)
 
 
 # -----------------------------------------------------------------------------
-# 2. USER'S LOGIC FUNCTIONS (Extracted from Notebook)
+# 2. DATA LOADING & EXPLORATION FUNCTIONS
 # -----------------------------------------------------------------------------
 
 @st.cache_data
@@ -83,241 +92,250 @@ def load_data(uploaded_file):
         st.error(f"Error loading file: {e}")
         return None
 
-def analyze_data_structure(df):
-    """
-    Performs the initial exploration logic found in the notebook.
-    Returns summary stats and null value checks.
-    """
-    buffer = io.StringIO() 
+def analyze_structure(df):
+    """Analyzes dataframe structure using io buffer for info()."""
+    buffer = io.StringIO()
     df.info(buf=buffer)
     info_text = buffer.getvalue()
     
-    summary = {
-        "head": df.head(),
-        "description": df.describe(),
-        "info": info_text, 
-        "missing_values": df.isnull().sum(),
-        "shape": df.shape,
-        "columns": df.columns.tolist()
-    }
-    return summary
+    desc = df.describe()
+    nulls = df.isnull().sum()
+    
+    return info_text, desc, nulls
 
-def perform_ml_prediction(df):
+# -----------------------------------------------------------------------------
+# 3. MACHINE LEARNING FUNCTIONS (GENERIC)
+# -----------------------------------------------------------------------------
+
+def run_custom_ml(df, target_col, feature_cols, split_size=0.2):
     """
-    Executes the Linear Regression logic from the notebook.
-    Predicts 'Close' price based on 'Open', 'High', 'Low', 'Volume'.
+    Runs Linear Regression on user-selected columns.
     """
     results = {}
     
-    # Check if necessary columns exist (Based on your notebook logic)
-    required_cols = ['Open', 'High', 'Low', 'Volume', 'Close']
+    # 1. Prepare Data
+    # Drop rows with missing values in selected columns to prevent errors
+    data = df[[target_col] + feature_cols].dropna()
     
-    # Basic check to see if we can run the specific finance model
-    # If columns don't match, we try to adapt or return error
-    if not all(col in df.columns for col in required_cols):
+    if len(data) == 0:
         results['status'] = 'error'
-        results['message'] = f"Dataset missing required columns for Prediction: {required_cols}"
-        return df, results
+        results['message'] = "Selected columns contain no valid data (all NaNs)."
+        return results
 
-    # 1. Feature Selection
-    X = df[['Open', 'High', 'Low', 'Volume']]
-    y = df['Close']
+    X = data[feature_cols]
+    y = data[target_col]
 
-    # 2. Splitting Data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # 2. Split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=split_size, random_state=42)
 
-    # 3. Model Training
+    # 3. Train
     model = LinearRegression()
     model.fit(X_train, y_train)
 
-    # 4. Predictions
+    # 4. Predict
     y_pred = model.predict(X_test)
 
-    # 5. Evaluation
+    # 5. Evaluate
     mse = mean_squared_error(y_test, y_pred)
+    mae = mean_absolute_error(y_test, y_pred)
     r2 = r2_score(y_test, y_pred)
 
-    # 6. Comparison DataFrame
-    comparison_df = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred})
-    
-    # Store results
+    # 6. Store Results
     results['status'] = 'success'
     results['mse'] = mse
+    results['mae'] = mae
     results['r2'] = r2
-    results['coefficients'] = model.coef_
+    results['coef'] = model.coef_
     results['intercept'] = model.intercept_
-    results['comparison_df'] = comparison_df
-    results['y_test'] = y_test
-    results['y_pred'] = y_pred
     
-    return df, results
-
+    # Create comparison dataframe
+    comp_df = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred})
+    comp_df = comp_df.sort_index() # Sort for better plotting
+    results['comparison'] = comp_df
+    
+    return results
 
 # -----------------------------------------------------------------------------
-# 3. DASHBOARD UI COMPONENTS
+# 4. UI COMPONENTS
 # -----------------------------------------------------------------------------
 
-def display_kpi_cards(df):
-    """Displays the top row of metrics."""
-    # Logic to handle both Generic CSVs and the specific Finance CSV from your notebook
-    total_records = len(df)
+def display_kpis(df):
+    """Displays top-level dataset metrics."""
+    total_rows = df.shape[0]
+    total_cols = df.shape[1]
     
-    # Default metric logic
+    # Select numeric columns for meaningful average
+    numeric_df = df.select_dtypes(include=[np.number])
+    
     col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Rows", f"{total_rows:,}")
+    col2.metric("Total Columns", total_cols)
     
-    col1.metric("Total Records", f"{total_records:,}")
-    
-    # If numeric data exists, show average of the first numeric column (generic)
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
-    if len(numeric_cols) > 0:
-        avg_val = df[numeric_cols[0]].mean()
-        col2.metric(f"Avg {numeric_cols[0]}", f"{avg_val:,.2f}")
-    
-    # If categorical data exists, show top category (generic)
-    cat_cols = df.select_dtypes(include=['object']).columns
-    if len(cat_cols) > 0:
-        top_cat = df[cat_cols[0]].mode()[0]
-        col3.metric(f"Top {cat_cols[0]}", str(top_cat))
-        
-        unique_count = df[cat_cols[0]].nunique()
-        col4.metric(f"Unique {cat_cols[0]}", unique_count)
+    if not numeric_df.empty:
+        first_num_col = numeric_df.columns[0]
+        avg_val = numeric_df[first_num_col].mean()
+        col3.metric(f"Avg {first_num_col}", f"{avg_val:,.2f}")
+    else:
+        col3.metric("Numeric Data", "None")
 
-
-def display_charts(df, ml_results):
-    """Displays the visualizations requested in the UI images."""
-    
-    # --- ROW 1: Distribution & Trends ---
-    c1, c2 = st.columns(2)
-    
-    with c1:
-        st.subheader("Data Distribution")
-        # Try to plot the Target variable if ML was run, else first numeric
-        if ml_results.get('status') == 'success':
-            fig = px.histogram(df, x='Close', nbins=50, title="Close Price Distribution", color_discrete_sequence=['#00D4FF'])
-        else:
-            num_cols = df.select_dtypes(include=[np.number]).columns
-            if len(num_cols) > 0:
-                fig = px.histogram(df, x=num_cols[0], title=f"{num_cols[0]} Distribution", color_discrete_sequence=['#00D4FF'])
-            else:
-                fig = go.Figure() # Empty
-        
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
-        st.plotly_chart(fig, use_container_width=True)
-
-    with c2:
-        st.subheader("Trend Over Time")
-        # Check for Date column
-        date_col = None
-        for col in df.columns:
-            if 'date' in col.lower() or 'time' in col.lower():
-                date_col = col
-                break
-        
-        if date_col:
-            try:
-                df[date_col] = pd.to_datetime(df[date_col])
-                trend_data = df.sort_values(by=date_col)
-                # Plot 'Close' if available (Finance), else first numeric
-                y_col = 'Close' if 'Close' in df.columns else (df.select_dtypes(include=[np.number]).columns[0] if len(df.select_dtypes(include=[np.number]).columns) > 0 else None)
-                
-                if y_col:
-                    fig_line = px.line(trend_data, x=date_col, y=y_col, title=f"{y_col} Trend")
-                    fig_line.update_traces(line_color='#00FF88', line_width=2)
-                    fig_line.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
-                    st.plotly_chart(fig_line, use_container_width=True)
-            except:
-                st.info("Could not process date column for plotting.")
-        else:
-            # Fallback if no date: Index plot
-            num_cols = df.select_dtypes(include=[np.number]).columns
-            if len(num_cols) > 0:
-                fig_line = px.line(df, y=num_cols[0], title=f"{num_cols[0]} by Index")
-                fig_line.update_traces(line_color='#00FF88')
-                fig_line.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
-                st.plotly_chart(fig_line, use_container_width=True)
-
-    # --- ROW 2: ML Visualization (Actual vs Predicted) ---
-    if ml_results.get('status') == 'success':
-        st.markdown("---")
-        st.subheader("🤖 ML Model Performance: Actual vs Predicted")
-        
-        comp_df = ml_results['comparison_df']
-        
-        # 1. Scatter Plot
-        col_ml_1, col_ml_2 = st.columns([2, 1])
-        
-        with col_ml_1:
-            fig_pred = go.Figure()
-            fig_pred.add_trace(go.Scatter(x=comp_df.index, y=comp_df['Actual'], mode='lines', name='Actual', line=dict(color='#00D4FF')))
-            fig_pred.add_trace(go.Scatter(x=comp_df.index, y=comp_df['Predicted'], mode='lines', name='Predicted', line=dict(color='#FF0055', dash='dash')))
-            fig_pred.update_layout(title="Actual vs Predicted Values", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
-            st.plotly_chart(fig_pred, use_container_width=True)
-            
-        with col_ml_2:
-            st.markdown("#### Model Metrics")
-            st.markdown(f"""
-            <div style="background-color: #1c2026; padding: 15px; border-radius: 5px; border-left: 3px solid #00FF88;">
-                <p style="color: #888; margin:0;">Mean Squared Error (MSE)</p>
-                <h3 style="color: #fff; margin:0;">{ml_results['mse']:.4f}</h3>
-            </div>
-            <br>
-            <div style="background-color: #1c2026; padding: 15px; border-radius: 5px; border-left: 3px solid #FF0055;">
-                <p style="color: #888; margin:0;">R2 Score</p>
-                <h3 style="color: #fff; margin:0;">{ml_results['r2']:.4f}</h3>
-            </div>
-            """, unsafe_allow_html=True)
+    # Count duplicates
+    duplicates = df.duplicated().sum()
+    col4.metric("Duplicate Rows", duplicates)
 
 
 # -----------------------------------------------------------------------------
-# 4. MAIN APP LOGIC
+# 5. MAIN APPLICATION LOGIC
 # -----------------------------------------------------------------------------
 
 def main():
-    st.title("Data Dashboard")
-    st.markdown("### Smart Analytics & Prediction")
-
-    # Upload Section
-    uploaded_file = st.file_uploader("Upload CSV file (e.g., stock_data.csv)", type=["csv"])
-
+    st.title("Business Analyzer AI")
+    st.markdown("### 📊 Interactive Data Analysis & ML Prediction")
+    
+    # --- 1. File Upload ---
+    uploaded_file = st.file_uploader("Upload your CSV file to begin analysis", type=['csv'])
+    
     if uploaded_file is not None:
-        # 1. Load Data
         df = load_data(uploaded_file)
         
         if df is not None:
-            # 2. Run Analysis Logic (Head, Describe, Info)
-            summary = analyze_data_structure(df)
-            
-            # 3. Run ML Logic (Linear Regression)
-            # Note: This runs automatically if columns match, preserving your notebook logic
-            df, ml_results = perform_ml_prediction(df)
-
-            # --- DISPLAY UI ---
-            
-            # KPI Cards
-            display_kpi_cards(df)
-            
+            # --- 2. KPI Section ---
+            display_kpis(df)
             st.markdown("---")
-            
-            # Charts & ML Visuals
-            display_charts(df, ml_results)
-            
-            # Raw Data Expander
-            with st.expander("View Raw Data & Statistics"):
-                st.subheader("First 5 Rows")
-                st.dataframe(summary['head'], use_container_width=True)
+
+            # --- 3. Tabs for Organization ---
+            tab1, tab2, tab3 = st.tabs(["🔍 Data Explorer", "📈 Visualization", "🤖 ML Predictor"])
+
+            # ==========================
+            # TAB 1: DATA EXPLORER
+            # ==========================
+            with tab1:
+                st.subheader("Dataset Overview")
+                st.dataframe(df.head(), use_container_width=True)
                 
-                st.subheader("Statistical Description")
-                st.dataframe(summary['description'], use_container_width=True)
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("#### Statistical Description")
+                    info, desc, nulls = analyze_structure(df)
+                    st.dataframe(desc, use_container_width=True)
                 
-                if ml_results.get('status') == 'success':
-                    st.subheader("Prediction Comparison Data")
-                    st.dataframe(ml_results['comparison_df'].head(10), use_container_width=True)
+                with c2:
+                    st.markdown("#### Missing Values")
+                    st.dataframe(nulls[nulls > 0], use_container_width=True)
+                    
+                    st.markdown("#### Column Info")
+                    st.text(info)
+
+            # ==========================
+            # TAB 2: VISUALIZATION
+            # ==========================
+            with tab2:
+                st.subheader("Visual Analysis")
+                
+                # 1. Correlation Heatmap
+                numeric_df = df.select_dtypes(include=[np.number])
+                if not numeric_df.empty:
+                    st.markdown("##### Correlation Heatmap")
+                    fig_corr, ax = plt.subplots(figsize=(10, 6))
+                    sns.heatmap(numeric_df.corr(), annot=True, cmap='coolwarm', fmt=".2f", linewidths=0.5, ax=ax)
+                    # Set background to match theme loosely
+                    fig_corr.patch.set_facecolor('#0E1117')
+                    ax.tick_params(colors='white')
+                    cbar = ax.collections[0].colorbar
+                    cbar.ax.yaxis.set_tick_params(color='white')
+                    plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
+                    st.pyplot(fig_corr)
+                else:
+                    st.info("No numeric columns found for correlation.")
+
+                # 2. Distribution Plot
+                st.markdown("##### Column Distribution")
+                dist_col = st.selectbox("Select Column for Distribution", df.columns)
+                if dist_col:
+                    fig_dist = px.histogram(df, x=dist_col, color_discrete_sequence=['#00D4FF'], title=f"Distribution of {dist_col}")
+                    fig_dist.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
+                    st.plotly_chart(fig_dist, use_container_width=True)
+
+            # ==========================
+            # TAB 3: ML PREDICTOR
+            # ==========================
+            with tab3:
+                st.subheader("Build a Prediction Model")
+                st.markdown("Select columns dynamically to train a Linear Regression model.")
+
+                # Filter only numeric columns for Regression
+                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                
+                if len(numeric_cols) < 2:
+                    st.warning("Need at least 2 numeric columns to run Regression Analysis.")
+                else:
+                    col_sel1, col_sel2 = st.columns(2)
+                    
+                    with col_sel1:
+                        target_col = st.selectbox("Select Target Variable (y)", numeric_cols, index=len(numeric_cols)-1)
+                    
+                    with col_sel2:
+                        # Exclude target from features list options
+                        feature_options = [c for c in numeric_cols if c != target_col]
+                        feature_cols = st.multiselect("Select Feature Variables (X)", feature_options, default=feature_options[:3])
+
+                    if st.button("Train Model"):
+                        if not feature_cols:
+                            st.error("Please select at least one feature column.")
+                        else:
+                            with st.spinner("Training Model..."):
+                                # Run Generic ML Function
+                                results = run_custom_ml(df, target_col, feature_cols)
+                                
+                                if results['status'] == 'error':
+                                    st.error(results['message'])
+                                else:
+                                    st.success("Model Trained Successfully!")
+                                    
+                                    # Metrics
+                                    m1, m2, m3 = st.columns(3)
+                                    m1.metric("R2 Score (Accuracy)", f"{results['r2']:.4f}")
+                                    m2.metric("Mean Squared Error", f"{results['mse']:.4f}")
+                                    m3.metric("Mean Absolute Error", f"{results['mae']:.4f}")
+                                    
+                                    st.markdown("---")
+                                    
+                                    # Plot Actual vs Predicted
+                                    st.subheader("Actual vs Predicted Comparison")
+                                    comp_df = results['comparison']
+                                    
+                                    fig_pred = go.Figure()
+                                    fig_pred.add_trace(go.Scatter(x=comp_df.index, y=comp_df['Actual'], mode='lines', name='Actual', line=dict(color='#00D4FF')))
+                                    fig_pred.add_trace(go.Scatter(x=comp_df.index, y=comp_df['Predicted'], mode='lines', name='Predicted', line=dict(color='#FF0055', dash='dash')))
+                                    
+                                    fig_pred.update_layout(
+                                        title=f"Prediction Analysis for {target_col}",
+                                        xaxis_title="Index",
+                                        yaxis_title=target_col,
+                                        paper_bgcolor="rgba(0,0,0,0)",
+                                        plot_bgcolor="rgba(0,0,0,0)",
+                                        font_color="white",
+                                        legend=dict(orientation="h", y=1.1)
+                                    )
+                                    st.plotly_chart(fig_pred, use_container_width=True)
+                                    
+                                    # Coefficients
+                                    with st.expander("View Model Coefficients"):
+                                        coef_df = pd.DataFrame({
+                                            "Feature": feature_cols,
+                                            "Coefficient": results['coef']
+                                        })
+                                        st.dataframe(coef_df, use_container_width=True)
+                                        st.write(f"**Intercept:** {results['intercept']}")
 
     else:
-        st.info("👆 Please upload a CSV file to start the Business Analyzer.")
+        # Landing Page
+        st.info("👆 Please upload a CSV file from the sidebar to start analysis.")
         st.markdown("""
-        **Note:** To see the ML Prediction features from your code, upload a dataset containing:
-        `Open`, `High`, `Low`, `Volume`, `Close` columns.
+        ### Welcome to Business Analyzer AI
+        This tool provides:
+        - **Automated Data Exploration**: Instantly view stats and missing data.
+        - **Interactive Visualization**: Heatmaps and Distributions.
+        - **Custom Machine Learning**: Select *any* target and feature columns to predict outcomes.
         """)
 
 if __name__ == "__main__":
