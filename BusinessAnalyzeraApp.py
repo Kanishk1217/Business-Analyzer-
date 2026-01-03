@@ -8,37 +8,37 @@ from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
 from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import mean_squared_error, r2_score, accuracy_score
+from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, confusion_matrix
 import io
 
 # -----------------------------------------------------------------------------
 # 1. DARK UI SETUP
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Business Analyzer", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Business Analyzer", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
-    /* Dark Theme & Neon Accents */
-    .stApp { background-color: #0E1117; color: #FAFAFA; }
+    .stApp { background-color: #0E1117; color: #E0E0E0; }
     div[data-testid="metric-container"] {
         background-color: #1A1C24; border: 1px solid #333;
         padding: 15px; border-radius: 10px;
     }
     div[data-testid="metric-container"] > div[data-testid="stMetricValue"] {
-        color: #00E5FF; font-weight: 700;
+        color: #00E5FF; font-size: 1.8rem; font-weight: 700;
     }
+    h1, h2, h3 { color: #FAFAFA !important; }
     div[data-testid="stDataFrame"] { background-color: #1A1C24; padding: 10px; border-radius: 8px; }
-    h1, h2, h3, h4 { color: #FAFAFA !important; }
     .stButton > button {
         background: linear-gradient(90deg, #00C6FF 0%, #0072FF 100%);
-        color: white; border: none; padding: 0.6rem; font-weight: bold; width: 100%;
+        color: white; border: none; padding: 0.6rem; font-weight: bold; border-radius: 8px; width: 100%;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# LOGIC FUNCTIONS
+# 2. HELPER FUNCTIONS
 # -----------------------------------------------------------------------------
+
 @st.cache_data
 def load_data(file):
     try:
@@ -46,89 +46,71 @@ def load_data(file):
     except:
         return None
 
-def get_info_df(df):
-    buffer = io.StringIO()
-    df.info(buf=buffer)
-    return pd.DataFrame({
-        "Column": df.columns,
-        "Non-Null": df.count().values,
-        "Dtype": [str(x) for x in df.dtypes],
-        "Nulls": df.isnull().sum().values
-    })
-
 def run_ml_logic(df, target_col, model_name):
-    # --- CRASH-PROOF PREPROCESSING ---
+    # Make a clean copy
     data = df.copy()
     
-    # 1. Handle Infinite values
+    # 1. Clean Infinities
     data.replace([np.inf, -np.inf], np.nan, inplace=True)
     
-    # 2. Drop rows where Target is missing (we can't train without a target)
+    # 2. Drop rows where Target is missing (Can't predict what doesn't exist)
     data = data.dropna(subset=[target_col])
     
-    if data.empty:
-        return None, None, None, {"Error": "The selected Target column is completely empty. Please choose another."}
-
-    # 3. Separate Features (AND Filter out Unusable Columns like Dates)
-    # We only keep Numeric and Object (Text) columns for features
-    valid_cols = data.select_dtypes(include=[np.number, 'object', 'category']).columns.tolist()
-    feature_cols = [c for c in valid_cols if c != target_col]
+    # 3. Feature Selection
+    feature_cols = [c for c in data.columns if c != target_col]
     
-    if not feature_cols:
-        return None, None, None, {"Error": "No valid feature columns found (only Date/Time columns detected?)."}
-
-    # 4. Fill Missing Values (Instead of dropping rows)
-    # Numeric: Fill with Mean
-    num_cols = data[feature_cols].select_dtypes(include=np.number).columns
-    if not num_cols.empty:
-        data[num_cols] = data[num_cols].fillna(data[num_cols].mean())
-    
-    # Categorical: Fill with "Unknown" and Encode
-    cat_cols = data[feature_cols].select_dtypes(exclude=np.number).columns
-    for col in cat_cols:
-        # Convert to string to ensure "Unknown" fits
-        data[col] = data[col].astype(str).replace('nan', 'Unknown').fillna("Unknown")
+    # 4. Robust Imputation (Fix NaNs)
+    # Numeric Columns: Fill with Mean
+    numeric_feats = data[feature_cols].select_dtypes(include=np.number).columns
+    for col in numeric_feats:
+        if data[col].isna().all():
+            # Drop column if it's completely empty
+            data = data.drop(columns=[col])
+            feature_cols.remove(col)
+        else:
+            data[col] = data[col].fillna(data[col].mean())
+            
+    # Categorical Columns: Fill with "Unknown" and Encode
+    cat_feats = data[feature_cols].select_dtypes(exclude=np.number).columns
+    for col in cat_feats:
+        data[col] = data[col].fillna("Unknown").astype(str)
         le = LabelEncoder()
         data[col] = le.fit_transform(data[col])
-    
-    # Final check: Drop any remaining NaNs (only if imputation failed)
+        
+    # Final check: Drop any rows that still have NaNs (rare edge case)
     data = data.dropna()
     
-    # Ensure we have enough data to split
     if len(data) < 5:
-        # If dataset is tiny, just duplicate data to allow code to run (Fallback)
-        if len(data) > 0:
-            data = pd.concat([data]*5, ignore_index=True)
-        else:
-             return None, None, None, {"Error": "Not enough valid data rows after cleaning."}
-    
+         return None, None, None, {"Error": "Not enough valid data rows to train a model."}
+
     X = data[feature_cols]
     y = data[target_col]
     
     # 5. Determine Problem Type
     problem_type = "regression"
-    if data[target_col].dtype == 'object' or data[target_col].nunique() < 20:
+    # If target is object OR has very few unique values (like < 15), assume classification
+    if data[target_col].dtype == 'object' or data[target_col].nunique() < 15:
         problem_type = "classification"
-        if data[target_col].dtype == 'object':
-            y = LabelEncoder().fit_transform(y.astype(str))
+        # Ensure target is numeric for sklearn
+        y = LabelEncoder().fit_transform(y.astype(str))
             
     # 6. Split Data
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    # 7. Model Training
+    # 7. Model Selection & Training
     if problem_type == "classification":
-        if "Forest" in model_name: model = RandomForestClassifier()
-        elif "Tree" in model_name: model = DecisionTreeClassifier()
+        if model_name == "Random Forest": model = RandomForestClassifier()
+        elif model_name == "Decision Tree": model = DecisionTreeClassifier()
         else: model = LogisticRegression(max_iter=1000)
     else:
-        if "Forest" in model_name: model = RandomForestRegressor()
-        elif "Tree" in model_name: model = DecisionTreeRegressor()
+        if model_name == "Random Forest": model = RandomForestRegressor()
+        elif model_name == "Decision Tree": model = DecisionTreeRegressor()
         else: model = LinearRegression()
         
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
     
-    # 8. Metrics
+    # 8. Calculate Metrics
     metrics = {}
     if problem_type == "classification":
         metrics["Accuracy"] = accuracy_score(y_test, y_pred)
@@ -139,8 +121,9 @@ def run_ml_logic(df, target_col, model_name):
     return problem_type, y_test, y_pred, metrics
 
 # -----------------------------------------------------------------------------
-# MAIN APP
+# 3. MAIN UI
 # -----------------------------------------------------------------------------
+
 def main():
     st.sidebar.title("Data Engine ⚡")
     uploaded_file = st.sidebar.file_uploader("Upload CSV", type=['csv'])
@@ -149,40 +132,126 @@ def main():
         df = load_data(uploaded_file)
         if df is None: return
 
-        # Identify Columns
-        numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns
-
-        # --- KPI ROW ---
+        # --- KPI HEADER ---
         st.markdown("### 🚀 Dashboard Overview")
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Rows", df.shape[0])
         k2.metric("Columns", df.shape[1])
-        k3.metric("Numeric", len(numeric_cols))
-        k4.metric("Categorical", len(categorical_cols))
+        k3.metric("Numeric", len(df.select_dtypes(include=np.number).columns))
+        k4.metric("Categorical", len(df.select_dtypes(exclude=np.number).columns))
         st.markdown("---")
-
-        # TABS
-        tab1, tab2, tab3 = st.tabs(["PART 1: Logic & Stats", "PART 2: Visuals", "PART 3: ML Engine"])
-
-        # =====================================================================
-        # PART 1: LOGIC & STATISTICS
-        # =====================================================================
+        
+        # --- TABS ---
+        tab1, tab2, tab3 = st.tabs(["🔍 Analysis", "🎨 Visualizations", "🧠 ML Prediction"])
+        
+        # TAB 1: ANALYSIS
         with tab1:
-            c_left, c_right = st.columns(2)
-            
-            with c_left:
-                st.subheader("1. Head & Info")
-                st.dataframe(df.head())
-                st.dataframe(get_info_df(df))
-                st.write("**Null Values:**")
-                st.dataframe(df.isnull().sum())
-
-            with c_right:
-                if len(numeric_cols) > 0:
-                    st.subheader("Numeric Summary")
-                    st.dataframe(df[numeric_cols].describe())
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Data Types")
+                dtype_df = pd.DataFrame(df.dtypes.astype(str), columns=["Type"])
+                st.dataframe(dtype_df, use_container_width=True)
                 
-                if len(categorical_cols) > 0:
-                    st.subheader("Categorical Summary (Head 5)")
-                    for col in categorical_cols:
+                st.subheader("Monotonicity Check")
+                for col in df.select_dtypes(include=np.number).columns:
+                    if df[col].is_monotonic_increasing:
+                        st.write(f"✅ **{col}**: Increasing")
+                    elif df[col].is_monotonic_decreasing:
+                        st.write(f"🔻 **{col}**: Decreasing")
+            
+            with c2:
+                st.subheader("Numeric Summary")
+                st.dataframe(df.describe(), use_container_width=True)
+                
+                st.subheader("Categorical Breakdown")
+                cat_cols = df.select_dtypes(include='object').columns
+                if len(cat_cols) > 0:
+                    sel_cat = st.selectbox("Inspect Column", cat_cols)
+                    st.write(f"**Top 5 Values for {sel_cat}:**")
+                    top = df[sel_cat].value_counts().head(5)
+                    # Loop logic as requested
+                    for category, count in top.items():
+                        st.text(f"  {category}: {count} occurrences")
+        
+        # TAB 2: VISUALIZATIONS
+        with tab2:
+            num_cols = df.select_dtypes(include=np.number).columns
+            if len(num_cols) > 0:
+                vis_col = st.selectbox("Select Column to Visualize", num_cols)
+                
+                # --- SUBPLOT LOGIC (Hist + Box) ---
+                fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+                fig.patch.set_facecolor('#1A1C24')
+                for a in ax: 
+                    a.set_facecolor('#1A1C24')
+                    a.tick_params(colors='white')
+                    a.xaxis.label.set_color('white')
+                    a.title.set_color('white')
+                
+                sns.histplot(df[vis_col], kde=True, ax=ax[0], color='#00E5FF')
+                ax[0].set_title(f'Distribution of {vis_col}')
+                
+                sns.boxplot(x=df[vis_col], ax=ax[1], color='#F72585')
+                ax[1].set_title(f'Outliers in {vis_col}')
+                
+                st.pyplot(fig)
+            else:
+                st.warning("No numeric columns available for these plots.")
+
+        # TAB 3: ML PREDICTION
+        with tab3:
+            c_ml1, c_ml2 = st.columns([1, 2])
+            
+            with c_ml1:
+                st.subheader("Model Setup")
+                target_col = st.selectbox("Select Target Variable", df.columns)
+                model_name = st.selectbox("Choose Model", ["Linear Regression", "Logistic Regression", "Random Forest", "Decision Tree"])
+                
+                if st.button("Train Model"):
+                    st.session_state['ml_run'] = run_ml_logic(df, target_col, model_name)
+                    st.session_state['ml_tgt'] = target_col
+
+            with c_ml2:
+                if 'ml_run' in st.session_state:
+                    problem_type, y_test, y_pred, metrics = st.session_state['ml_run']
+                    
+                    if problem_type is None:
+                        st.error(metrics.get("Error", "Unknown Error"))
+                    else:
+                        target_col_name = st.session_state['ml_tgt']
+                        
+                        st.subheader("Results")
+                        cols = st.columns(len(metrics))
+                        for i, (k, v) in enumerate(metrics.items()):
+                            cols[i].metric(k, f"{v:.4f}")
+                            
+                        # --- EXACT PLOTTING LOGIC ---
+                        fig = plt.figure(figsize=(8, 6))
+                        fig.patch.set_facecolor('#1A1C24')
+                        ax = plt.gca()
+                        ax.set_facecolor('#1A1C24')
+                        ax.tick_params(colors='white')
+                        ax.xaxis.label.set_color('white')
+                        ax.yaxis.label.set_color('white')
+                        ax.title.set_color('white')
+                        for spine in ax.spines.values(): spine.set_color('#444')
+
+                        if problem_type == "regression":
+                            plt.scatter(y_test, y_pred, alpha=0.6, color='#00E5FF')
+                            plt.xlabel("Actual")
+                            plt.ylabel("Predicted")
+                            plt.title(f"{target_col_name}: Actual vs Predicted")
+                            plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2)
+                            st.pyplot(fig)
+                            
+                        elif problem_type == "classification":
+                            # Fix palette warning by using hue
+                            sns.countplot(x=y_pred, hue=y_pred, palette='viridis', ax=ax, legend=False)
+                            plt.title(f"{target_col_name} Predicted Class Distribution")
+                            st.pyplot(fig)
+
+    else:
+        st.info("Waiting for CSV upload...")
+
+if __name__ == "__main__":
+    main()
