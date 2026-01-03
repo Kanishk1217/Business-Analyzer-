@@ -88,10 +88,7 @@ def analyze_data_structure(df):
     Performs the initial exploration logic found in the notebook.
     Returns summary stats and null value checks.
     """
-    
-   
-
-buffer = io.StringIO() 
+    buffer = io.StringIO() 
     df.info(buf=buffer)
     info_text = buffer.getvalue()
     
