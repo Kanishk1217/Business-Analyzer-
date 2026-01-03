@@ -41,7 +41,10 @@ st.markdown("""
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_data(file):
-    return pd.read_csv(file)
+    try:
+        return pd.read_csv(file)
+    except:
+        return None
 
 def get_info_df(df):
     buffer = io.StringIO()
@@ -54,37 +57,55 @@ def get_info_df(df):
     })
 
 def run_ml_logic(df, target_col, model_name):
-    # Robust Preprocessing for ML (Part 3 Logic - Kept Perfect)
+    # --- CRASH-PROOF PREPROCESSING ---
     data = df.copy()
+    
+    # 1. Handle Infinite values
     data.replace([np.inf, -np.inf], np.nan, inplace=True)
+    
+    # 2. Drop rows where Target is missing (we can't train without a target)
     data = data.dropna(subset=[target_col])
     
+    if data.empty:
+        return None, None, None, {"Error": "The selected Target column is completely empty (all NaNs). Please choose another column."}
+
+    # 3. Separate Features
     feature_cols = [c for c in data.columns if c != target_col]
     
-    # Fill Numeric
+    # 4. Fill Missing Values (Instead of dropping rows)
+    # Numeric: Fill with Mean
     num_cols = data[feature_cols].select_dtypes(include=np.number).columns
-    data[num_cols] = data[num_cols].fillna(data[num_cols].mean())
+    if not num_cols.empty:
+        data[num_cols] = data[num_cols].fillna(data[num_cols].mean())
     
-    # Fill & Encode Categorical
+    # Categorical: Fill with "Unknown" and Encode
     cat_cols = data[feature_cols].select_dtypes(exclude=np.number).columns
     for col in cat_cols:
-        data[col] = data[col].fillna("Unknown").astype(str)
+        # Convert to string to ensure "Unknown" fits
+        data[col] = data[col].astype(str).replace('nan', 'Unknown').fillna("Unknown")
         le = LabelEncoder()
         data[col] = le.fit_transform(data[col])
-        
+    
+    # Final check: Drop any remaining NaNs (rare edge case)
     data = data.dropna()
+    
+    if len(data) < 5:
+        return None, None, None, {"Error": "Not enough valid data rows (need at least 5) to train a model."}
     
     X = data[feature_cols]
     y = data[target_col]
     
+    # 5. Determine Problem Type
     problem_type = "regression"
     if data[target_col].dtype == 'object' or data[target_col].nunique() < 20:
         problem_type = "classification"
         if data[target_col].dtype == 'object':
             y = LabelEncoder().fit_transform(y.astype(str))
             
+    # 6. Split Data
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
+    # 7. Model Training
     if problem_type == "classification":
         if "Forest" in model_name: model = RandomForestClassifier()
         elif "Tree" in model_name: model = DecisionTreeClassifier()
@@ -97,6 +118,7 @@ def run_ml_logic(df, target_col, model_name):
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
     
+    # 8. Metrics
     metrics = {}
     if problem_type == "classification":
         metrics["Accuracy"] = accuracy_score(y_test, y_pred)
@@ -134,7 +156,7 @@ def main():
         tab1, tab2, tab3 = st.tabs(["PART 1: Logic & Stats", "PART 2: Visuals", "PART 3: ML Engine"])
 
         # =====================================================================
-        # PART 1: ALL SPECIFIC LOGIC (Added exactly as requested)
+        # PART 1: LOGIC & STATISTICS (Your requested additions)
         # =====================================================================
         with tab1:
             c_left, c_right = st.columns(2)
@@ -147,7 +169,6 @@ def main():
                 st.dataframe(df.isnull().sum())
 
             with c_right:
-                # 2. Summaries (If Numeric/Categorical)
                 if len(numeric_cols) > 0:
                     st.subheader("Numeric Summary")
                     st.dataframe(df[numeric_cols].describe())
@@ -164,7 +185,7 @@ def main():
             c_logic1, c_logic2 = st.columns(2)
             
             with c_logic1:
-                # 3. Monotonic Check Loop
+                # Monotonic Check
                 st.markdown("#### 📈 Monotonic Trends")
                 found_monotonic = False
                 for col in numeric_cols:
@@ -177,7 +198,7 @@ def main():
                 if not found_monotonic:
                     st.info("No strictly monotonic columns found.")
 
-                # 4. Correlation Loop (Corr > 0.5)
+                # Correlation Loop
                 st.markdown("#### 🔥 High Correlations (>0.5)")
                 for col in numeric_cols:
                     corr = df[numeric_cols].corr()[col]
@@ -188,7 +209,7 @@ def main():
                         st.write(top_corr)
 
             with c_logic2:
-                # 5. Top 3 Categorical Loop
+                # Top 3 Categorical Loop
                 st.markdown("#### 📋 Top 3 Categories")
                 for col in categorical_cols:
                     top = df[col].value_counts().head(3)
@@ -196,11 +217,10 @@ def main():
                     for category, count in top.items():
                         st.text(f"  {category}: {count} occurrences")
 
-            # 6. Target Logic & Dummies
+            # Target Logic
             st.markdown("---")
             st.subheader("4. Preprocessing Logic (Target & Dummies)")
             
-            # Auto-Target Logic
             if len(numeric_cols) > 0:
                 target_col_auto = numeric_cols[-1]
             elif len(categorical_cols) > 0:
@@ -209,7 +229,7 @@ def main():
                 target_col_auto = "None"
             st.info(f"Auto-Detected Target: **{target_col_auto}**")
 
-            # Dummies Logic (Display only to prevent crashing the UI with massive tables)
+            # Dummies Logic
             if target_col_auto != "None" and target_col_auto in df.columns:
                 X_temp = df.drop(columns=[target_col_auto])
                 X_dummies = pd.get_dummies(X_temp, drop_first=True)
@@ -239,12 +259,11 @@ def main():
                 ax[1].set_title(f"Outliers: {vis_col}")
                 st.pyplot(fig)
             
-            # --- THE MISSING PART 2 LOOP ---
+            # Categorical Loop (Part 2 specific addition)
             if len(categorical_cols) > 0:
                 st.markdown("---")
                 st.subheader("Categorical Countplots (All Columns)")
                 
-                # Loop through ALL categorical columns
                 for col in categorical_cols:
                     st.write(f"**Distribution: {col}**")
                     fig2, ax2 = plt.subplots(figsize=(8, 4))
@@ -253,14 +272,13 @@ def main():
                     ax2.tick_params(colors='white')
                     ax2.title.set_color('white')
                     
-                    # Exact plot logic requested
                     sns.countplot(x=df[col], order=df[col].value_counts().index, palette='viridis', ax=ax2)
                     plt.title(f'Count of categories in {col}', color='white')
                     plt.xticks(rotation=45, color='white')
                     st.pyplot(fig2)
 
         # =====================================================================
-        # PART 3: ML ENGINE (Kept Perfect)
+        # PART 3: ML ENGINE (With Robust Crash-Proofing)
         # =====================================================================
         with tab3:
             st.subheader("Machine Learning Engine")
@@ -277,34 +295,38 @@ def main():
                 problem_type, y_test, y_pred, metrics = run_ml_logic(df, target_col, model_name)
                 
                 with c_ml2:
-                    st.write(f"**Problem Type:** {problem_type.upper()}")
-                    cols = st.columns(len(metrics))
-                    for i, (k, v) in enumerate(metrics.items()):
-                        cols[i].metric(k, f"{v:.4f}")
-                        
-                    # Plots
-                    fig = plt.figure(figsize=(8, 6))
-                    fig.patch.set_facecolor('#1A1C24')
-                    ax = plt.gca()
-                    ax.set_facecolor('#1A1C24')
-                    ax.tick_params(colors='white')
-                    ax.title.set_color('white')
-                    ax.xaxis.label.set_color('white')
-                    ax.yaxis.label.set_color('white')
-                    for spine in ax.spines.values(): spine.set_color('#444')
+                    # Check for errors returned by logic
+                    if problem_type is None:
+                        st.error(metrics["Error"])
+                    else:
+                        st.write(f"**Problem Type:** {problem_type.upper()}")
+                        cols = st.columns(len(metrics))
+                        for i, (k, v) in enumerate(metrics.items()):
+                            cols[i].metric(k, f"{v:.4f}")
+                            
+                        # Plots
+                        fig = plt.figure(figsize=(8, 6))
+                        fig.patch.set_facecolor('#1A1C24')
+                        ax = plt.gca()
+                        ax.set_facecolor('#1A1C24')
+                        ax.tick_params(colors='white')
+                        ax.title.set_color('white')
+                        ax.xaxis.label.set_color('white')
+                        ax.yaxis.label.set_color('white')
+                        for spine in ax.spines.values(): spine.set_color('#444')
 
-                    if problem_type == "regression":
-                        plt.scatter(y_test, y_pred, alpha=0.6, color='#00E5FF')
-                        plt.xlabel("Actual")
-                        plt.ylabel("Predicted")
-                        plt.title(f"{target_col}: Actual vs Predicted")
-                        plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2)
-                        st.pyplot(fig)
-                        
-                    elif problem_type == "classification":
-                        sns.countplot(x=y_pred, hue=y_pred, palette='viridis', ax=ax, legend=False)
-                        plt.title(f"{target_col} Predicted Class Distribution")
-                        st.pyplot(fig)
+                        if problem_type == "regression":
+                            plt.scatter(y_test, y_pred, alpha=0.6, color='#00E5FF')
+                            plt.xlabel("Actual")
+                            plt.ylabel("Predicted")
+                            plt.title(f"{target_col}: Actual vs Predicted")
+                            plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2)
+                            st.pyplot(fig)
+                            
+                        elif problem_type == "classification":
+                            sns.countplot(x=y_pred, hue=y_pred, palette='viridis', ax=ax, legend=False)
+                            plt.title(f"{target_col} Predicted Class Distribution")
+                            st.pyplot(fig)
 
     else:
         st.info("👆 Please upload a CSV file to begin.")
