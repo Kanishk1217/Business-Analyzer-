@@ -88,13 +88,14 @@ def analyze_data_structure(df):
     Performs the initial exploration logic found in the notebook.
     Returns summary stats and null value checks.
     """
-    # Mimicking df.head(), df.info(), df.describe() logic
-    info_buffer = []
-    df.info(buf=info_buffer)
+   buffer = io.StringIO() 
+    df.info(buf=buffer)
+    info_text = buffer.getvalue()
     
     summary = {
         "head": df.head(),
         "description": df.describe(),
+        "info": info_text, 
         "missing_values": df.isnull().sum(),
         "shape": df.shape,
         "columns": df.columns.tolist()
