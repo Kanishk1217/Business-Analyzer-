@@ -276,3 +276,60 @@ def main():
                     plt.title(f'Count of categories in {col}', color='white')
                     plt.xticks(rotation=45, color='white')
                     st.pyplot(fig2)
+ # TAB 3: ML PREDICTION
+        with tab3:
+            c_ml1, c_ml2 = st.columns([1, 2])
+            
+            with c_ml1:
+                st.subheader("Model Setup")
+                target_col = st.selectbox("Select Target Variable", df.columns)
+                model_name = st.selectbox("Choose Model", ["Linear Regression", "Logistic Regression", "Random Forest", "Decision Tree"])
+                
+                if st.button("Train Model"):
+                    st.session_state['ml_run'] = run_ml_logic(df, target_col, model_name)
+                    st.session_state['ml_tgt'] = target_col
+
+            with c_ml2:
+                if 'ml_run' in st.session_state:
+                    problem_type, y_test, y_pred, metrics = st.session_state['ml_run']
+                    
+                    if problem_type is None:
+                        st.error(metrics.get("Error", "Unknown Error"))
+                    else:
+                        target_col_name = st.session_state['ml_tgt']
+                        
+                        st.subheader("Results")
+                        cols = st.columns(len(metrics))
+                        for i, (k, v) in enumerate(metrics.items()):
+                            cols[i].metric(k, f"{v:.4f}")
+                            
+                        # --- EXACT PLOTTING LOGIC ---
+                        fig = plt.figure(figsize=(8, 6))
+                        fig.patch.set_facecolor('#1A1C24')
+                        ax = plt.gca()
+                        ax.set_facecolor('#1A1C24')
+                        ax.tick_params(colors='white')
+                        ax.xaxis.label.set_color('white')
+                        ax.yaxis.label.set_color('white')
+                        ax.title.set_color('white')
+                        for spine in ax.spines.values(): spine.set_color('#444')
+
+                        if problem_type == "regression":
+                            plt.scatter(y_test, y_pred, alpha=0.6, color='#00E5FF')
+                            plt.xlabel("Actual")
+                            plt.ylabel("Predicted")
+                            plt.title(f"{target_col_name}: Actual vs Predicted")
+                            plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2)
+                            st.pyplot(fig)
+                            
+                        elif problem_type == "classification":
+                            # Fix palette warning by using hue
+                            sns.countplot(x=y_pred, hue=y_pred, palette='viridis', ax=ax, legend=False)
+                            plt.title(f"{target_col_name} Predicted Class Distribution")
+                            st.pyplot(fig)
+
+    else:
+        st.info("Waiting for CSV upload...")
+
+if __name__ == "__main__":
+    main()
