@@ -1,372 +1,306 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
+import seaborn as sns
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-import io
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.preprocessing import LabelEncoder
 
 # -----------------------------------------------------------------------------
-# 1. PAGE CONFIGURATION & UI STYLING
+# 1. PAGE CONFIGURATION & "CLEAN DARK" UI
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Business Analyzer AI",
-    page_icon="📊",
+    page_icon="🧠",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS: Matches your 'Dark Dashboard' UI images exactly
+# STRICT Dark Theme & Card UI
 st.markdown("""
 <style>
-    /* 1. Main Background - Dark Navy/Black */
+    /* Global Background */
     .stApp {
         background-color: #0E1117;
-        color: #FAFAFA;
+        color: #E0E0E0;
     }
     
-    /* 2. KPI Cards - Dark Grey with Borders & Shadows */
+    /* KPI Cards */
     div[data-testid="metric-container"] {
-        background-color: #191c24;
-        border: 1px solid #2d333b;
+        background-color: #1F2937;
+        border: 1px solid #374151;
         padding: 15px;
-        border-radius: 8px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        transition: transform 0.2s;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
     }
-    div[data-testid="metric-container"]:hover {
-        transform: scale(1.02);
-        border-color: #00D4FF;
-    }
-    
-    /* 3. Metric Labels & Values */
     div[data-testid="metric-container"] > label {
-        color: #97a1b1;
-        font-size: 14px;
-        font-family: 'Inter', sans-serif;
+        color: #9CA3AF;
+        font-size: 0.85rem;
     }
     div[data-testid="metric-container"] > div[data-testid="stMetricValue"] {
-        color: #00D4FF; /* Cyan Accent */
-        font-size: 26px;
+        color: #38BDF8; /* Light Blue Accent */
+        font-size: 1.8rem;
         font-weight: 700;
     }
     
-    /* 4. Headings & Text */
-    h1, h2, h3 {
-        color: #FAFAFA !important;
-    }
-    .stMarkdown p {
-        color: #C0C0C0;
-    }
-    
-    /* 5. File Uploader */
-    .stFileUploader {
-        border: 1px dashed #444;
+    /* Tables */
+    div[data-testid="stDataFrame"] {
+        background-color: #1F2937;
         border-radius: 10px;
-        padding: 20px;
-        background-color: #191c24;
+        padding: 10px;
     }
     
-    /* 6. Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #191c24;
-        border-radius: 5px;
-        color: white;
-        border: 1px solid #333;
-    }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background-color: #00D4FF;
-        color: black;
-        font-weight: bold;
+    /* Headers */
+    h1, h2, h3 {
+        color: #F3F4F6 !important;
+        font-family: 'Helvetica Neue', sans-serif;
     }
     
-    /* 7. Buttons */
+    /* Buttons */
     .stButton > button {
-        background-color: #00D4FF;
-        color: #0E1117;
+        background-color: #38BDF8;
+        color: #0F172A;
         font-weight: bold;
         border: none;
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
         width: 100%;
+        transition: all 0.3s ease;
     }
     .stButton > button:hover {
-        background-color: #00B8DB;
-        color: white;
+        background-color: #0EA5E9;
+        transform: translateY(-2px);
+    }
+    
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
+        font-size: 1rem;
+        font-weight: 600;
     }
 </style>
 """, unsafe_allow_html=True)
 
 
 # -----------------------------------------------------------------------------
-# 2. HELPER FUNCTIONS (Logic from Notebook)
+# 2. SMART DATA LOGIC (Auto-Cleaning & Auto-Selection)
 # -----------------------------------------------------------------------------
 
 @st.cache_data
 def load_data(file):
-    """Loads CSV file into a Dataframe."""
     try:
         return pd.read_csv(file)
     except Exception as e:
         st.error(f"Error loading file: {e}")
         return None
 
-def analyze_dataframe(df):
+def get_clean_data_info(df):
     """
-    Performs standard EDA similar to df.info() and df.describe().
-    Uses io.StringIO to capture info output safely.
+    Converts raw df.info() into a clean DataFrame for the UI.
+    No more raw text dumps.
     """
-    buffer = io.StringIO()
-    df.info(buf=buffer)
-    info_str = buffer.getvalue()
+    info_data = {
+        "Column Name": df.columns,
+        "Data Type": [str(x) for x in df.dtypes],
+        "Non-Null Count": df.count().values,
+        "Missing Values": df.isnull().sum().values,
+        "Unique Values": [df[col].nunique() for col in df.columns]
+    }
+    return pd.DataFrame(info_data)
+
+def preprocess_for_ml(df):
+    """
+    Automatically encodes categorical text columns so ML works on everything.
+    """
+    df_processed = df.copy()
+    label_encoders = {}
+    
+    for col in df_processed.columns:
+        if df_processed[col].dtype == 'object':
+            le = LabelEncoder()
+            # Convert to string to handle mixed types/NaNs gracefully
+            df_processed[col] = le.fit_transform(df_processed[col].astype(str))
+            label_encoders[col] = le
+            
+    # Fill remaining numeric NaNs with mean to prevent crashing
+    df_processed = df_processed.fillna(df_processed.mean())
+    
+    return df_processed
+
+def auto_select_features(df):
+    """
+    Heuristic to automatically pick Target (y) and Features (X).
+    Logic: 
+    - Target: Usually the last column or 'Close'/'Price'/'Salary'
+    - Features: Everything else.
+    """
+    cols = df.columns.tolist()
+    
+    # 1. Try to find a likely target by name
+    likely_targets = ['close', 'price', 'salary', 'total', 'target', 'class']
+    target = cols[-1] # Default to last column
+    
+    for col in cols:
+        if any(x in col.lower() for x in likely_targets):
+            target = col
+            break
+            
+    # 2. Features are everything else
+    features = [c for c in cols if c != target]
+    
+    return target, features
+
+def perform_ml(df, target_col, feature_cols):
+    """
+    Your Linear Regression Logic, wrapped to be robust.
+    """
+    # Preprocess (Encode strings, handle NaNs)
+    df_clean = preprocess_for_ml(df)
+    
+    X = df_clean[feature_cols]
+    y = df_clean[target_col]
+    
+    # Split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Train
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    
+    # Predict
+    y_pred = model.predict(X_test)
+    
+    # Evaluate
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+    
+    # Comparison Data
+    comp_df = pd.DataFrame({"Actual": y_test, "Predicted": y_pred}).sort_index()
     
     return {
-        "shape": df.shape,
-        "columns": df.columns.tolist(),
-        "missing": df.isnull().sum(),
-        "description": df.describe(),
-        "info": info_str
+        "mse": mse,
+        "r2": r2,
+        "comparison": comp_df,
+        "coef": model.coef_
     }
-
-def run_ml_pipeline(df, target_col, feature_cols, model_type="Linear Regression"):
-    """
-    Generic ML Pipeline:
-    1. Selects Data
-    2. Handles Missing Values
-    3. Splits Data
-    4. Trains Model
-    5. Evaluates
-    """
-    results = {}
-    
-    # 1. Prepare Data
-    try:
-        # Create a subset with selected columns and drop rows with NaN in those columns
-        model_df = df[feature_cols + [target_col]].dropna()
-        
-        if model_df.empty:
-            return {"status": "error", "message": "Selected columns contain no matching valid data (all NaN)."}
-        
-        X = model_df[feature_cols]
-        y = model_df[target_col]
-        
-        # 2. Split Data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
-        # 3. Initialize Model
-        if model_type == "Linear Regression":
-            model = LinearRegression()
-        else:
-            model = RandomForestRegressor(n_estimators=100, random_state=42)
-            
-        # 4. Train
-        model.fit(X_train, y_train)
-        
-        # 5. Predict
-        y_pred = model.predict(X_test)
-        
-        # 6. Evaluate
-        mse = mean_squared_error(y_test, y_pred)
-        mae = mean_absolute_error(y_test, y_pred)
-        r2 = r2_score(y_test, y_pred)
-        
-        # 7. Comparison Data
-        comparison = pd.DataFrame({"Actual": y_test, "Predicted": y_pred}).sort_index()
-        
-        results = {
-            "status": "success",
-            "mse": mse, 
-            "mae": mae,
-            "r2": r2,
-            "comparison": comparison,
-            "model": model
-        }
-        
-    except Exception as e:
-        results = {"status": "error", "message": str(e)}
-        
-    return results
 
 
 # -----------------------------------------------------------------------------
-# 3. MAIN DASHBOARD LOGIC
+# 3. MAIN APP (Clean UI)
 # -----------------------------------------------------------------------------
 
 def main():
     st.title("Business Analyzer AI")
-    st.markdown("##### 🚀 From Raw Data to Actionable Insights")
+    st.markdown("##### 🤖 Automated Insights & Prediction")
     
-    # --- A. Sidebar / Top Upload ---
-    uploaded_file = st.file_uploader("📂 Upload your CSV file", type=['csv'])
+    # --- Upload Section ---
+    uploaded_file = st.file_uploader("📂 Upload CSV", type=['csv'])
     
-    if uploaded_file is not None:
+    if uploaded_file:
         df = load_data(uploaded_file)
-        
-        if df is not None:
-            # --- B. KPI Cards (Always visible) ---
-            st.markdown("### 📊 Dataset Overview")
-            
-            total_rows = len(df)
-            total_cols = len(df.columns)
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-            
-            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-            kpi1.metric("Total Rows", f"{total_rows:,}")
-            kpi2.metric("Total Columns", total_cols)
-            kpi3.metric("Numeric Fields", len(numeric_cols))
-            kpi4.metric("Text Fields", len(categorical_cols))
-            
-            st.markdown("---")
-            
-            # --- C. Tabs for Logic ---
-            tab_eda, tab_ml = st.tabs(["🔍 Smart Analysis", "🤖 Prediction Engine"])
-            
-            # ==========================
-            # TAB 1: SMART ANALYSIS
-            # ==========================
-            with tab_eda:
-                col_left, col_right = st.columns([1, 2])
-                
-                with col_left:
-                    st.subheader("Data Inspection")
-                    st.write("**Data Info**")
-                    analysis = analyze_dataframe(df)
-                    st.text(analysis['info'])
-                    
-                    st.write("**Missing Values**")
-                    st.dataframe(analysis['missing'][analysis['missing'] > 0], use_container_width=True)
+        if df is None: return
 
-                with col_right:
-                    st.subheader("Visual Exploration")
+        # --- KPI Cards ---
+        st.markdown("### 📊 Dataset Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Rows", df.shape[0])
+        col2.metric("Columns", df.shape[1])
+        col3.metric("Numeric", len(df.select_dtypes(include=np.number).columns))
+        col4.metric("Text/Cat", len(df.select_dtypes(exclude=np.number).columns))
+        
+        st.markdown("---")
+        
+        # --- Tabs ---
+        tab1, tab2 = st.tabs(["🔍 Data Insights", "🚀 Auto-ML"])
+        
+        # TAB 1: DATA INSIGHTS
+        with tab1:
+            col_info, col_viz = st.columns([1, 1])
+            
+            with col_info:
+                st.subheader("📋 Data Dictionary")
+                # CLEAN TABLE instead of raw text
+                info_df = get_clean_data_info(df)
+                st.dataframe(info_df, use_container_width=True, hide_index=True)
+                
+                st.subheader("📉 Missing Values")
+                missing_data = df.isnull().sum()
+                if missing_data.sum() > 0:
+                    st.bar_chart(missing_data[missing_data > 0])
+                else:
+                    st.success("No missing values found!")
+
+            with col_viz:
+                st.subheader("📊 Distributions")
+                # Auto-select first numeric column
+                num_cols = df.select_dtypes(include=np.number).columns.tolist()
+                if num_cols:
+                    selected_col = st.selectbox("Visualize Column", num_cols)
                     
-                    # 1. Statistical Summary
-                    with st.expander("View Statistical Summary", expanded=True):
-                        st.dataframe(analysis['description'], use_container_width=True)
+                    # Histogram
+                    fig = px.histogram(df, x=selected_col, nbins=30, color_discrete_sequence=['#38BDF8'])
+                    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
+                    st.plotly_chart(fig, use_container_width=True)
                     
-                    # 2. Correlation Heatmap (Seaborn style from notebook)
-                    if len(numeric_cols) > 1:
-                        st.markdown("##### 🔥 Correlation Heatmap")
-                        fig_corr, ax = plt.subplots(figsize=(10, 4))
-                        # Dark background for plot to match UI
-                        fig_corr.patch.set_facecolor('#191c24')
-                        ax.set_facecolor('#191c24')
+                    # Boxplot (As requested in original notebook requirements)
+                    fig_box = px.box(df, y=selected_col, color_discrete_sequence=['#38BDF8'])
+                    fig_box.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
+                    st.plotly_chart(fig_box, use_container_width=True)
+
+        # TAB 2: AUTO-ML PREDICTION
+        with tab2:
+            st.subheader("🤖 Automated Prediction Model")
+            
+            # AUTO-SELECTION LOGIC
+            target_auto, feats_auto = auto_select_features(df)
+            
+            # Show the selection to user (editable but pre-filled)
+            c1, c2 = st.columns([1, 3])
+            with c1:
+                target_col = st.selectbox("Target (Y)", df.columns, index=df.columns.get_loc(target_auto))
+            with c2:
+                # Remove target from options
+                options = [c for c in df.columns if c != target_col]
+                default_feats = [f for f in feats_auto if f != target_col]
+                feature_cols = st.multiselect("Features (X)", options, default=default_feats)
+            
+            # ONE CLICK TRAIN
+            if st.button("⚡ Run Auto-Prediction"):
+                if not feature_cols:
+                    st.error("Please ensure at least one feature is selected.")
+                else:
+                    with st.spinner("🧠 Auto-cleaning data & Training model..."):
+                        results = perform_ml(df, target_col, feature_cols)
                         
-                        sns.heatmap(df[numeric_cols].corr(), annot=True, fmt=".2f", cmap="coolwarm", ax=ax, cbar=True)
+                        # Results UI
+                        st.success("Model trained successfully!")
                         
-                        # Fix text colors for dark mode
-                        ax.tick_params(colors='white', which='both')
-                        cbar = ax.collections[0].colorbar
-                        cbar.ax.yaxis.set_tick_params(color='white')
-                        plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
+                        # Metrics
+                        m1, m2 = st.columns(2)
+                        m1.metric("Accuracy (R²)", f"{results['r2']:.2%}")
+                        m2.metric("Mean Squared Error", f"{results['mse']:.4f}")
                         
-                        st.pyplot(fig_corr)
-                    
-                    # 3. Distribution Plot (Dynamic)
-                    st.markdown("##### 📈 Column Distributions")
-                    dist_col = st.selectbox("Select column to visualize", df.columns)
-                    if dist_col:
-                        fig_dist = px.histogram(df, x=dist_col, color_discrete_sequence=['#00D4FF'], nbins=30)
-                        fig_dist.update_layout(
+                        # Visualization
+                        st.subheader("Actual vs Predicted")
+                        comp_df = results['comparison']
+                        
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=comp_df.index, y=comp_df['Actual'], mode='lines', name='Actual', line=dict(color='#38BDF8')))
+                        fig.add_trace(go.Scatter(x=comp_df.index, y=comp_df['Predicted'], mode='lines', name='Predicted', line=dict(color='#F472B6', dash='dash')))
+                        fig.update_layout(
                             paper_bgcolor="rgba(0,0,0,0)", 
                             plot_bgcolor="rgba(0,0,0,0)", 
                             font_color="white",
-                            margin=dict(l=20, r=20, t=20, b=20)
+                            height=400
                         )
-                        st.plotly_chart(fig_dist, use_container_width=True)
-
-            # ==========================
-            # TAB 2: PREDICTION ENGINE
-            # ==========================
-            with tab_ml:
-                st.subheader("Train a Machine Learning Model")
-                st.markdown("Configure your model dynamically for any dataset.")
-                
-                # Check if we have enough data for ML
-                if len(numeric_cols) < 2:
-                    st.warning("⚠️ This dataset doesn't have enough numeric columns for Regression analysis.")
-                else:
-                    # 1. Settings
-                    c_set1, c_set2, c_set3 = st.columns([1, 1, 1])
-                    
-                    with c_set1:
-                        # Target Selection
-                        target_col = st.selectbox("1. Select Target (What to predict?)", numeric_cols, index=len(numeric_cols)-1)
-                    
-                    with c_set2:
-                        # Feature Selection (Exclude Target)
-                        feature_options = [c for c in numeric_cols if c != target_col]
-                        feature_cols = st.multiselect("2. Select Features (Predictors)", feature_options, default=feature_options[:3] if feature_options else None)
-                    
-                    with c_set3:
-                        # Model Type
-                        model_type = st.selectbox("3. Select Model Type", ["Linear Regression", "Random Forest"])
-                        st.write("") 
-                        train_btn = st.button("🚀 Train Model")
-
-                    # 2. Training & Results
-                    if train_btn:
-                        if not feature_cols:
-                            st.error("Please select at least one Feature column.")
-                        else:
-                            with st.spinner("Training model..."):
-                                results = run_ml_pipeline(df, target_col, feature_cols, model_type)
-                                
-                                if results['status'] == 'success':
-                                    st.success("Model trained successfully!")
-                                    
-                                    # Metrics Row
-                                    m1, m2, m3 = st.columns(3)
-                                    m1.metric("R² Score (Accuracy)", f"{results['r2']:.4f}")
-                                    m2.metric("Mean Squared Error", f"{results['mse']:.4f}")
-                                    m3.metric("Mean Absolute Error", f"{results['mae']:.4f}")
-                                    
-                                    st.markdown("---")
-                                    
-                                    # Visualization Row
-                                    v1, v2 = st.columns([2, 1])
-                                    
-                                    with v1:
-                                        st.markdown("##### Actual vs Predicted")
-                                        comp_df = results['comparison']
-                                        
-                                        fig_pred = go.Figure()
-                                        fig_pred.add_trace(go.Scatter(x=comp_df.index, y=comp_df['Actual'], mode='lines', name='Actual', line=dict(color='#00D4FF')))
-                                        fig_pred.add_trace(go.Scatter(x=comp_df.index, y=comp_df['Predicted'], mode='lines', name='Predicted', line=dict(color='#FF0055', dash='dash')))
-                                        
-                                        fig_pred.update_layout(
-                                            paper_bgcolor="rgba(0,0,0,0)",
-                                            plot_bgcolor="rgba(0,0,0,0)",
-                                            font_color="white",
-                                            xaxis_title="Index",
-                                            yaxis_title=target_col,
-                                            legend=dict(orientation="h", y=1.1)
-                                        )
-                                        st.plotly_chart(fig_pred, use_container_width=True)
-                                        
-                                    with v2:
-                                        st.markdown("##### Model Logic")
-                                        if model_type == "Linear Regression":
-                                            st.write("Intercept:", results['model'].intercept_)
-                                            coef_df = pd.DataFrame({"Feature": feature_cols, "Coeff": results['model'].coef_})
-                                            st.dataframe(coef_df, use_container_width=True)
-                                        else:
-                                            st.write("Feature Importance:")
-                                            imp_df = pd.DataFrame({"Feature": feature_cols, "Importance": results['model'].feature_importances_})
-                                            st.dataframe(imp_df.sort_values(by="Importance", ascending=False), use_container_width=True)
-                                            
-                                else:
-                                    st.error(results['message'])
+                        st.plotly_chart(fig, use_container_width=True)
 
     else:
-        # Landing Page State
-        st.info("👆 Please upload a CSV file to generate the Dashboard.")
+        # Landing Page
+        st.info("👆 Upload a CSV to start.")
 
 if __name__ == "__main__":
     main()
