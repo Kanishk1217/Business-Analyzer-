@@ -131,10 +131,7 @@ y_pred = model.predict(X_test)
 
 feature_importance = None
 if problem_type == "regression" and model_name == "Random Forest":
-    feature_importance = pd.Series(
-        model.feature_importances_,
-        index=X.columns
-    ).sort_values(ascending=False)
+    feature_importance = pd.Series(model.feature_importances_,index=X.columns).sort_values(ascending=False)
 
     
     # 8. Metrics
