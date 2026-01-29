@@ -126,8 +126,16 @@ def run_ml_logic(df, target_col, model_name):
         elif "Tree" in model_name: model = DecisionTreeRegressor()
         else: model = LinearRegression()
         
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+   model.fit(X_train, y_train)
+y_pred = model.predict(X_test)
+
+feature_importance = None
+if problem_type == "regression" and model_name == "Random Forest":
+    feature_importance = pd.Series(
+        model.feature_importances_,
+        index=X.columns
+    ).sort_values(ascending=False)
+
     
     # 8. Metrics
     metrics = {}
